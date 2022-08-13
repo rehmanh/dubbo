@@ -29,6 +29,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mock;
+import org.mockito.Mockito;
 
 import java.io.Serializable;
 import java.util.Random;
@@ -53,11 +55,15 @@ public class ReplierDispatcherTest {
 
     private int port;
 
+    @Mock
+    RpcMessageHandler rpcMessageHandler;
+
     @BeforeEach
     public void startServer() throws RemotingException {
+        rpcMessageHandler = Mockito.spy(new RpcMessageHandler());
         port = NetUtils.getAvailablePort();
         ReplierDispatcher dispatcher = new ReplierDispatcher();
-        dispatcher.addReplier(RpcMessage.class, new RpcMessageHandler());
+        dispatcher.addReplier(RpcMessage.class, rpcMessageHandler);
         dispatcher.addReplier(Data.class, (channel, msg) -> new StringMessage("hello world"));
         exchangeServer = Exchangers.bind(URL.valueOf("exchange://localhost:" + port + "?" + CommonConstants.TIMEOUT_KEY + "=60000"), dispatcher);
     }
