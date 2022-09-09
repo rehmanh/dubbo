@@ -17,22 +17,24 @@
 package org.apache.dubbo.remoting.transport.netty4;
 
 import org.apache.dubbo.common.URL;
+import org.apache.dubbo.common.bytecode.NoSuchMethodException;
+import org.apache.dubbo.common.bytecode.Wrapper;
 import org.apache.dubbo.common.constants.CommonConstants;
 import org.apache.dubbo.common.utils.NetUtils;
 import org.apache.dubbo.remoting.RemotingException;
 import org.apache.dubbo.remoting.exchange.ExchangeChannel;
 import org.apache.dubbo.remoting.exchange.ExchangeServer;
 import org.apache.dubbo.remoting.exchange.Exchangers;
+import org.apache.dubbo.remoting.exchange.support.Replier;
 import org.apache.dubbo.remoting.exchange.support.ReplierDispatcher;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
-import org.mockito.Mockito;
 
 import java.io.Serializable;
+import java.lang.reflect.InvocationTargetException;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,6 +43,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.Mockito.*;
 
 
 /**
@@ -55,19 +58,15 @@ public class ReplierDispatcherTest {
 
     private int port;
 
-    @Mock
-    RpcMessageHandler rpcMessageHandler;
-
     @BeforeEach
     public void startServer() throws RemotingException {
-        rpcMessageHandler = Mockito.spy(new RpcMessageHandler());
         port = NetUtils.getAvailablePort();
         ReplierDispatcher dispatcher = new ReplierDispatcher();
-        dispatcher.addReplier(RpcMessage.class, rpcMessageHandler);
+        Replier<RpcMessage> replierMock = createReplierMock();
+        dispatcher.addReplier(RpcMessage.class, replierMock);
         dispatcher.addReplier(Data.class, (channel, msg) -> new StringMessage("hello world"));
         exchangeServer = Exchangers.bind(URL.valueOf("exchange://localhost:" + port + "?" + CommonConstants.TIMEOUT_KEY + "=60000"), dispatcher);
     }
-
 
     @Test
     public void testDataPackage() throws Exception {
@@ -128,6 +127,37 @@ public class ReplierDispatcherTest {
                     clients.remove(key);
                 });
         }
+    }
+
+    private Replier<RpcMessage> createReplierMock() throws RemotingException {
+        Replier<RpcMessage> replierMock = mock(Replier.class);
+        when(replierMock.reply(any(ExchangeChannel.class), any(RpcMessage.class))).thenAnswer((arguments) -> {
+            ExchangeChannel channel = arguments.getArgument(0);
+            RpcMessage msg = arguments.getArgument(1);
+            String desc = msg.getMethodDesc();
+            Object[] args = msg.getArguments();
+            Object impl = getImplementation(msg.getClassName());
+            Wrapper wrap = Wrapper.getWrapper(impl.getClass());
+            try {
+                return new MockResult(wrap.invokeMethod(impl, desc, msg.getParameterTypes(), args));
+            } catch (NoSuchMethodException e) {
+                throw new RemotingException(channel, "Service method not found.");
+            } catch (InvocationTargetException e) {
+                return new MockResult(e.getTargetException());
+            }
+        });
+        return replierMock;
+    }
+
+    private Object getImplementation(String service) {
+        String impl = service + "Impl";
+        try {
+            Class<?> cl = Thread.currentThread().getContextClassLoader().loadClass(impl);
+            return cl.newInstance();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
     }
 
 
